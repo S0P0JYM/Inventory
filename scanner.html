@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no" />
+<title>TC56 Scanner — Web App</title>
+<style>
+  :root{font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;}
+  body{margin:0;background:#0f1724;color:#e6eef8;display:flex;flex-direction:column;height:100vh;}
+  header{background:#0b1220;padding:12px 16px;box-shadow:0 2px 6px rgba(0,0,0,.35);}
+  h1{margin:0;font-size:18px}
+  main{padding:12px;flex:1;display:flex;gap:12px;flex-direction:column;overflow:auto}
+  .controls{display:flex;gap:8px;flex-wrap:wrap}
+  input[type="text"]{
+    font-size:18px;padding:10px;border-radius:8px;border:1px solid #233142;background:#0b1a2a;color:#e7f0fb;flex:1;outline:none;
+    -webkit-appearance:none;
+  }
+  button{padding:10px 12px;border-radius:8px;border:none;background:#1070f4;color:white;font-weight:600}
+  button.ghost{background:transparent;border:1px solid #2c3e56;color:#dbeafe}
+  .stats{font-size:13px;color:#b7c6d8}
+  .history{background:#071422;border-radius:8px;padding:10px;flex:1;overflow:auto;max-height:50vh}
+  .item{padding:8px;border-bottom:1px dashed rgba(255,255,255,.03);display:flex;justify-content:space-between;gap:8px}
+  .item small{color:#9fb0c9}
+  .searchbar{display:flex;gap:8px;align-items:center}
+  footer{padding:10px 16px;background:#08121a;font-size:13px;color:#99b0c9;text-align:center}
+  @media (min-width:700px){ main{max-width:900px;margin:0 auto} }
+</style>
+</head>
+<body>
+<header>
+  <h1>TC56 Scanner Hub</h1>
+  <div class="stats" id="status">Ready — focus the input and scan</div>
+</header>
+
+<main>
+  <div class="controls">
+    <div style="flex:1;min-width:220px">
+      <label for="scanInput" style="display:block;margin-bottom:6px;font-size:13px;color:#9fb0c9">Scan input (auto focus)</label>
+      <input id="scanInput" type="text" placeholder="Scan barcode — will capture on Enter / suffix" autocomplete="off" inputmode="numeric" />
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <button id="btnManual" title="Add manual entry">Add manual</button>
+      <button id="btnExport" class="ghost" title="Export CSV">Export CSV</button>
+      <button id="btnCopy" class="ghost" title="Copy list">Copy</button>
+      <button id="btnClear" class="ghost" title="Clear history">Clear</button>
+    </div>
+  </div>
+
+  <div class="searchbar" style="margin-top:6px">
+    <input id="filter" placeholder="Filter history (type to search)" style="flex:1;padding:8px;border-radius:8px;border:1px solid #233142;background:#081522;color:#e7f0fb"/>
+    <div style="min-width:140px;text-align:right;color:#9fb0c9">Total: <span id="count">0</span></div>
+  </div>
+
+  <div class="history" id="history" aria-live="polite">
+    <!-- scanned items go here -->
+  </div>
+</main>
+
+<footer>
+  Works best if DataWedge is configured to send keystrokes (with Enter suffix) to the browser. See instructions above the page.
+</footer>
+
+<script>
+(function(){
+  const input = document.getElementById('scanInput');
+  const historyEl = document.getElementById('history');
+  const countEl = document.getElementById('count');
+  const statusEl = document.getElementById('status');
+  const filterEl = document.getElementById('filter');
+
+  let items = JSON.parse(localStorage.getItem('tc56_scans_v1') || '[]');
+
+  function save() {
+    localStorage.setItem('tc56_scans_v1', JSON.stringify(items));
+    render();
+  }
+
+  function render(filter = '') {
+    historyEl.innerHTML = '';
+    const f = filter.trim().toLowerCase();
+    const shown = items.filter(i => !f || i.value.toLowerCase().includes(f) || (i.meta && i.meta.toLowerCase().includes(f)));
+    shown.forEach((it, idx) => {
+      const div = document.createElement('div');
+      div.className = 'item';
+      div.innerHTML = '<div><strong>' + escapeHtml(it.value) + '</strong><br><small>' + new Date(it.t).toLocaleString() + (it.meta ? ' • ' + escapeHtml(it.meta) : '') + '</small></div>'
+                      + '<div><button data-i="'+idx+'" class="ghost">del</button></div>';
+      historyEl.appendChild(div);
+      div.querySelector('button')?.addEventListener('click', (e)=>{
+        const i = Number(e.currentTarget.dataset.i);
+        items.splice(i,1);
+        save();
+      });
+    });
+    countEl.textContent = items.length;
+  }
+
+  function escapeHtml(s){ return (''+s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+  function onScanned(value, meta = '') {
+    if (!value || !value.trim()) return;
+    const entry = { value: value.trim(), t: Date.now(), meta: meta };
+    items.unshift(entry); // newest first
+    // keep reasonable history
+    if (items.length > 1000) items = items.slice(0,1000);
+    save();
+    // small feedback
+    try { navigator.vibrate && navigator.vibrate(40); } catch(e){}
+    statusEl.textContent = 'Last scan: ' + entry.value + ' (' + new Date(entry.t).toLocaleTimeString() + ')';
+    // clear input ready for next
+    input.value = '';
+    input.focus();
+  }
+
+  // Capture barcode input delivered as keystrokes + Enter suffix
+  input.addEventListener('keydown', function(e){
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const v = input.value;
+      onScanned(v);
+    }
+  });
+
+  // Manual add button
+  document.getElementById('btnManual').addEventListener('click', () => {
+    const v = prompt('Manual entry (type or paste barcode):');
+    if (v) onScanned(v);
+  });
+
+  // Export CSV
+  document.getElementById('btnExport').addEventListener('click', () => {
+    if (!items.length) return alert('No scanned items to export.');
+    const rows = [['value','timestamp','notes']];
+    items.forEach(i => rows.push([i.value, new Date(i.t).toISOString(), (i.meta||'')]));
+    const csv = rows.map(r => r.map(cell => '"' + String(cell).replace(/"/g,'""') + '"').join(',')).join('\\n');
+    const blob = new Blob([csv], {type:'text/csv'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'scans_' + (new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')) + '.csv';
+    document.body.appendChild(a); a.click();
+    setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 1500);
+  });
+
+  // Copy to clipboard
+  document.getElementById('btnCopy').addEventListener('click', async () => {
+    if (!items.length) return alert('No scanned items');
+    const text = items.map(i => i.value).join('\\n');
+    try {
+      await navigator.clipboard.writeText(text);
+      alert('Copied ' + items.length + ' items to clipboard.');
+    } catch (e) {
+      prompt('Copy manually - select and copy:', text);
+    }
+  });
+
+  // Clear
+  document.getElementById('btnClear').addEventListener('click', ()=> {
+    if (!confirm('Clear all scan history?')) return;
+    items = [];
+    save();
+  });
+
+  // Search / filter
+  filterEl.addEventListener('input', ()=> render(filterEl.value));
+
+  // allow paste (if scanner set to paste to clipboard)
+  input.addEventListener('paste', (ev) =>{
+    setTimeout(()=> {
+      const v = input.value;
+      if (v && v.trim()) onScanned(v.trim());
+    }, 10);
+  });
+
+  // initial render and autofocus
+  render();
+  setTimeout(()=>{ input.focus(); try { input.select(); } catch(e){} }, 300);
+
+  // Optional: handle focus when tapped area outside input (for TC56 touch)
+  document.body.addEventListener('touchstart', () => { input.focus(); });
+
+  // expose helper for debugging in console:
+  window.tc56Scanner = { items, onScanned };
+})();
+</script>
+</body>
+</html>

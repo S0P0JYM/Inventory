@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+<title>Warehouse — TC56 + DataWedge + QLn320 Print</title>
+<style>
+  :root{--bg:#0f1724;--panel:#081522;--ink:#e6eef8;--muted:#9fb0c9;--line:#233142;--accent:#1070f4;--accent-2:#18b67e}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial}
+  header{padding:12px 16px;background:#0b1220;border-bottom:1px solid #0e2238;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  h1{margin:0;font-size:18px}
+  main{padding:12px;display:flex;flex-direction:column;gap:12px}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px}
+  select, input, button, textarea{font-size:16px}
+  select,input[type="text"],input[type="number"],textarea{padding:10px;border-radius:8px;border:1px solid var(--line);background:#0b1a2a;color:var(--ink)}
+  textarea{width:100%;min-height:120px}
+  button{padding:10px 12px;border:none;border-radius:8px;background:var(--accent);color:#fff;font-weight:600}
+  button.ghost{background:transparent;border:1px solid var(--line);color:#dbeafe}
+  button.good{background:var(--accent-2)}
+  .pill{padding:4px 8px;border-radius:999px;background:#0b1a2a;border:1px solid var(--line);color:var(--muted);font-size:12px}
+  .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:8px}
+  .col-4{grid-column:span 4;min-width:180px}
+  .col-6{grid-column:span 6;min-width:220px}
+  .col-12{grid-column:span 12}
+  .history{max-height:40vh;overflow:auto}
+  .item{display:grid;grid-template-columns:1fr auto;gap:8px;padding:10px;border-bottom:1px dashed rgba(255,255,255,.06)}
+  .item small{color:var(--muted)}
+  .badge{display:inline-block;padding:2px 6px;border-radius:6px;border:1px solid var(--line);background:#0b1a2a;color:#c7d6ef;font-size:12px}
+  .ok{background:#0f2a1f;border-color:#1f513f}
+  .warn{background:#2a1f10;border-color:#5a3b1b}
+  .err{background:#33161c;border-color:#6b1b20}
+  footer{padding:10px 16px;color:var(--muted);text-align:center;border-top:1px solid #0e2238}
+  .status{font-size:13px;color:var(--muted)}
+  .hidden-input{position:absolute;left:-9999px;opacity:0;height:0;width:0}
+</style>
+</head>
+<body>
+<header class="card" style="border:none;border-radius:0;">
+  <h1>Warehouse — TC56</h1>
+  <span id="status" class="pill">Ready. Focus is set for scans.</span>
+  <span class="pill">Total scans: <span id="count">0</span></span>
+</header>
+
+<main>
+  <!-- ========== WORKFLOW / SCANNING ========== -->
+  <section class="card">
+    <div class="grid">
+      <div class="col-6">
+        <label>Mode</label><br/>
+        <select id="mode">
+          <option value="receive">Receive</option>
+          <option value="pick">Pick</option>
+          <option value="cycle">Cycle Count</option>
+        </select>
+      </div>
+      <div class="col-6">
+        <label>Order / Session ID (optional)</label><br/>
+        <input id="session" placeholder="PO12345 / PICK-789 / COUNT-AREA-A" />
+      </div>
+
+      <div class="col-6">
+        <label>Scan BIN/Location (optional)</label><br/>
+        <input id="bin" placeholder="A1-03-02" />
+      </div>
+      <div class="col-6">
+        <label>Quantity (default = 1)</label><br/>
+        <input id="qty" type="number" min="1" step="1" value="1" />
+      </div>
+
+      <div class="col-12">
+        <div class="row">
+          <button id="btnUndo" class="ghost">Undo last</button>
+          <button id="btnExport" class="ghost">Export CSV</button>
+          <button id="btnCopy" class="ghost">Copy text</button>
+          <button id="btnClear" class="ghost">Clear all</button>
+          <span class="pill">Filter:</span>
+          <input id="filter" placeholder="Search (SKU/bin/order/user note)" style="flex:1;min-width:200px">
+        </div>
+      </div>
+    </div>
+    <p class="status" style="margin-top:8px">Tip: DataWedge should send <b>Enter</b> suffix. This page catches scans even if the input isn’t visibly focused.</p>
+  </section>
+
+  <section class="card">
+    <div class="row" style="justify-content:space-between;align-items:center">
+      <strong>History</strong>
+      <div>
+        <span class="badge">Receive: SKU, BIN, QTY</span>
+        <span class="badge">Pick: SKU (validates against expected list)</span>
+        <span class="badge">Cycle: SKU, BIN, counted QTY</span>
+      </div>
+    </div>
+    <div id="history" class="history" aria-live="polite"></div>
+  </section>
+
+  <!-- ========== PRINT LABELS (QLn320) ========== -->
+  <section class="card">
+    <div class="row" style="justify-content:space-between;align-items:center">
+      <strong>Print Labels — Zebra QLn320 (Bluetooth)</strong>
+      <span class="pill" id="printStatus">EB: <em>not detected</em> • Fallback: download .zpl</span>
+    </div>
+
+    <div class="grid" style="margin-top:8px">
+      <div class="col-6">
+        <label>Printer Bluetooth MAC (Enterprise Browser)</label><br/>
+        <input id="btMac" placeholder="AA:BB:CC:DD:EE:FF" />
+      </div>
+      <div class="col-6">
+        <label>Copies</label><br/>
+        <input id="copies" type="number" min="1" step="1" value="1" />
+      </div>
+
+      <div class="col-6">
+        <label>SKU / Barcode Data</label><br/>
+        <input id="lblSku" placeholder="SKU-123456" />
+      </div>
+      <div class="col-6">
+        <label>Bin/Location (small text)</label><br/>
+        <input id="lblBin" placeholder="A1-03-02" />
+      </div>
+
+      <div class="col-6">
+        <label>Label template</label><br/>
+        <select id="lblTemplate">
+          <option value="2x1">2x1 in (203dpi)</option>
+          <option value="2x2">2x2 in (203dpi)</option>
+        </select>
+      </div>
+      <div class="col-6">
+        <label>Barcode type</label><br/>
+        <select id="lblSym">
+          <option value="code128">Code128</option>
+          <option value="qr">QR</option>
+        </select>
+      </div>
+
+      <div class="col-12">
+        <div class="row">
+          <button id="btnPreview" class="ghost">Preview ZPL</button>
+          <button id="btnPrint" class="good">Print to QLn320 (EB)</button>
+          <button id="btnDownload" class="ghost">Download .zpl</button>
+        </div>
+      </div>
+
+      <div class="col-12">
+        <label>ZPL preview</label>
+        <textarea id="zpl"></textarea>
+      </div>
+    </div>
+    <p class="status">Use **Enterprise Browser** to print via Bluetooth (SPP). If you’re in Chrome, use **Download .zpl** and print it with <i>Zebra PrintConnect</i> on-device.</p>
+  </section>
+</main>
+
+<footer>
+  DataWedge: Associate to browser → Keystroke Output → Suffix Enter.  
+  Printing: Pair QLn320 via Bluetooth → in Enterprise Browser use the Print button (EB API).
+</footer>
+
+<!-- Hidden target for scanners that require a focused input -->
+<input id="scanSink" class="hidden-input" autocomplete="off" />
+
+<script>
+(function(){
+  // ===== PICK LIST (demo) =====
+  const expectedPick = new Set(["SKU-123","SKU-456","SKU-999"]);
+
+  // ===== STATE =====
+  const state = { items: JSON.parse(localStorage.getItem('tc56_wh_scans_v1') || '[]') };
+
+  // ===== ELEMENTS =====
+  const historyEl = document.getElementById('history');
+  const countEl = document.getElementById('count');
+  const statusEl = document.getElementById('status');
+  const filterEl = document.getElementById('filter');
+  const modeEl = document.getElementById('mode');
+  const sessionEl = document.getElementById('session');
+  const binEl = document.getElementById('bin');
+  const qtyEl = document.getElementById('qty');
+  const sink = document.getElementById('scanSink');
+
+  // Print elements
+  const btMacEl = document.getElementById('btMac');
+  const copiesEl = document.getElementById('copies');
+  const skuEl = document.getElementById('lblSku');
+  const binTxtEl = document.getElementById('lblBin');
+  const tplEl = document.getElementById('lblTemplate');
+  const symEl = document.getElementById('lblSym');
+  const zplEl = document.getElementById('zpl');
+  const printStatusEl = document.getElementById('printStatus');
+
+  // Buttons
+  document.getElementById('btnExport').addEventListener('click', exportCSV);
+  document.getElementById('btnCopy').addEventListener('click', copyAll);
+  document.getElementById('btnClear').addEventListener('click', clearAll);
+  document.getElementById('btnUndo').addEventListener('click', undoLast);
+  filterEl.addEventListener('input', ()=> render());
+
+  document.getElementById('btnPreview').addEventListener('click', ()=>{
+    zplEl.value = buildZPL();
+  });
+  document.getElementById('btnDownload').addEventListener('click', ()=>{
+    const zpl = buildZPL();
+    const blob = new Blob([zpl], {type:'text/plain'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'label.zpl';
+    document.body.appendChild(a); a.click();
+    setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove();}, 1000);
+  });
+  document.getElementById('btnPrint').addEventListener('click', printEB);
+
+  // ===== ENVIRONMENT DETECT (Enterprise Browser) =====
+  const EB_AVAIL = (typeof EB !== 'undefined') && EB.PrinterZebra;
+  printStatusEl.innerHTML = EB_AVAIL ? 'EB: <b>detected</b> • Bluetooth printing enabled' : 'EB: <em>not detected</em> • Fallback: download .zpl';
+
+  // ===== FEEDBACK =====
+  const audioCtx = (window.AudioContext||window.webkitAudioContext) ? new (window.AudioContext||window.webkitAudioContext)() : null;
+  function beep(ok=true){
+    if(!audioCtx) return;
+    const o = audioCtx.createOscillator(); const g = audioCtx.createGain();
+    o.type = ok ? 'sine' : 'square'; o.frequency.value = ok ? 880 : 220; g.gain.value=0.05;
+    o.connect(g).connect(audioCtx.destination); o.start(); setTimeout(()=>o.stop(), ok?120:200);
+  }
+  function vibrate(ms){ try{ navigator.vibrate && navigator.vibrate(ms);}catch(e){} }
+
+  // ===== SCAN CAPTURE =====
+  let buffer=''; let tLast=0;
+  window.addEventListener('keydown',(e)=>{
+    if(e.key==='Enter'){ e.preventDefault(); handleEnter(); }
+    else if(e.key.length===1){ handleChar(e.key); }
+  });
+  sink.addEventListener('keydown',(e)=>{ if(e.key==='Enter'){ e.preventDefault(); handleEnter(); }});
+  function handleChar(ch){ const now=Date.now(); if(now-tLast>200) buffer=''; tLast=now; buffer+=ch; }
+  function handleEnter(){ const v = (sink.value&&sink.value.length>0)?sink.value:buffer; sink.value=''; buffer=''; if(v && v.trim()) onScanned(v.trim()); }
+  function ensureFocus(){ if(document.activeElement !== sink) sink.focus(); }
+  setInterval(ensureFocus, 1500); setTimeout(ensureFocus, 300);
+
+  // ===== CORE =====
+  function onScanned(code){
+    const mode = modeEl.value;
+    const bin = binEl.value.trim();
+    const qty = parseInt(qtyEl.value||'1',10)||1;
+    const sess = sessionEl.value.trim();
+
+    let status='ok', note='';
+    if(mode==='pick'){
+      if(expectedPick.size && !expectedPick.has(code)){ status='warn'; note='SKU not in expected list'; }
+      else { note='Pick OK'; }
+    } else if(mode==='receive'){
+      note = bin ? `Receive to BIN ${bin}` : 'Receive';
+    } else if(mode==='cycle'){
+      note = bin ? `Count @ ${bin}` : 'Count';
+    }
+
+    const entry = { t:Date.now(), mode, code, bin, qty, sess, status, note };
+    state.items.unshift(entry);
+    if(state.items.length>5000) state.items = state.items.slice(0,5000);
+    save(); render(); (status==='ok'?beep(true):beep(false)); vibrate(status==='ok'?35:80);
+    statusEl.textContent = `Last: ${entry.code} • ${entry.mode} • ${new Date(entry.t).toLocaleTimeString()}`;
+  }
+  function save(){ localStorage.setItem('tc56_wh_scans_v1', JSON.stringify(state.items)); }
+  function render(){
+    const q=(filterEl.value||'').trim().toLowerCase(); historyEl.innerHTML='';
+    const shown = state.items.filter(it=>{
+      if(!q) return true; const blob=`${it.code} ${it.mode} ${it.bin} ${it.sess} ${it.qty} ${it.note}`.toLowerCase(); return blob.includes(q);
+    });
+    shown.forEach((it, idx)=>{
+      const row=document.createElement('div'); row.className='item';
+      const when=new Date(it.t).toLocaleString(); const tone=it.status==='ok'?'ok':(it.status==='warn'?'warn':'err');
+      row.innerHTML = `
+        <div>
+          <div><strong>${esc(it.code)}</strong> &nbsp;
+            <span class="badge ${tone}">${it.mode.toUpperCase()}</span>
+            ${it.bin?`<span class="badge">BIN ${esc(it.bin)}</span>`:''}
+            ${it.sess?`<span class="badge">SESSION ${esc(it.sess)}</span>`:''}
+            <span class="badge">QTY ${it.qty}</span>
+          </div>
+          <small>${when} • ${esc(it.note||'')}</small>
+        </div>
+        <div><button class="ghost" data-i="${idx}">del</button></div>
+      `;
+      row.querySelector('button').addEventListener('click',(e)=>{
+        const i=Number(e.currentTarget.dataset.i); const actual = state.items.indexOf(shown[i]);
+        if(actual>-1){ state.items.splice(actual,1); save(); render(); }
+      });
+      historyEl.appendChild(row);
+    });
+    countEl.textContent = state.items.length;
+  }
+  function esc(s){ return (''+s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[m])); }
+  function exportCSV(){
+    if(!state.items.length) return alert('No records to export.');
+    const rows=[['timestamp','mode','code','bin','qty','session','status','note']];
+    state.items.forEach(it=> rows.push([new Date(it.t).toISOString(), it.mode, it.code, it.bin, it.qty, it.sess, it.status, it.note||'']));
+    const csv = rows.map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
+    const blob=new Blob([csv], {type:'text/csv'}); const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob); a.download=`warehouse_scans_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.csv`;
+    document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 1200);
+  }
+  async function copyAll(){
+    if(!state.items.length) return alert('No records to copy.');
+    const text = state.items.map(it=>`${new Date(it.t).toISOString()}\t${it.mode}\t${it.code}\t${it.bin||''}\t${it.qty}\t${it.sess||''}\t${it.status}\t${it.note||''}`).join('\n');
+    try{ await navigator.clipboard.writeText(text); alert(`Copied ${state.items.length} rows`);}catch(e){ prompt('Copy manually:', text); }
+  }
+  function clearAll(){ if(!confirm('Clear ALL history?')) return; state.items=[]; save(); render(); }
+  function undoLast(){ if(!state.items.length) return; state.items.shift(); save(); render(); }
+
+  // ===== ZPL BUILDER (QLn320 203dpi) =====
+  function buildZPL(){
+    const sku = (skuEl.value||'').trim() || 'SKU-000';
+    const bin = (binTxtEl.value||'').trim();
+    const copies = Math.max(1, parseInt(copiesEl.value||'1',10));
+    const sym = symEl.value;
+    const tpl = tplEl.value; // 2x1 or 2x2
+
+    // Basic layout in dots (203dpi): 2x1in ~ 406w x 203h, 2x2in ~ 406w x 406h
+    const W = 406, H = (tpl==='2x2'?406:203);
+
+    // Head/tail standard ZPL
+    let z = '^XA';
+    z += '^PW'+W;               // print width
+    z += '^LH0,0';              // label home
+    z += '^CI28';               // UTF-8
+    z += '^PR5';                // print speed
+
+    // Text: SKU large
+    z += '^FO20,20^A0N,40,40^FD'+zesc(sku)+'^FS';
+
+    // Text: BIN small (if any)
+    if (bin) z += '^FO20,70^A0N,28,28^FDBIN: '+zesc(bin)+'^FS';
+
+    // Barcode block
+    if (sym==='qr') {
+      // QR centered
+      z += '^FO260,20^BQN,2,6^FDLA,'+zesc(sku)+'^FS';
+    } else {
+      // Code128 across bottom half
+      z += '^FO20,'+(H-90)+'^BCN,80,Y,N,N^FD'+zesc(sku)+'^FS';
+    }
+
+    // Copies
+    z += '^PQ'+copies+',0,1,N';
+    z += '^XZ';
+    zplEl.value = z;
+    return z;
+  }
+  function zesc(s){ return String(s).replace(/[\^\\]/g, m => (m==='^'?'\\^':'\\\\')); }
+
+  // ===== ENTERPRISE BROWSER PRINT (Bluetooth SPP) =====
+  function printEB(){
+    if(!EB_AVAIL){ alert('Enterprise Browser not detected. Use Download .zpl and print via PrintConnect.'); return; }
+    const mac = (btMacEl.value||'').trim();
+    if(!mac){ alert('Enter printer Bluetooth MAC (AA:BB:CC:DD:EE:FF)'); return; }
+    const zpl = buildZPL();
+
+    try{
+      // Configure and connect
+      EB.PrinterZebra.connect({
+        deviceAddress: mac,
+        connectionType: EB.PrinterZebra.CONNECTION_TYPE_BLUETOOTH
+      }, function(result){
+        if(result.status !== 'OK'){
+          alert('Printer connect failed: '+JSON.stringify(result)); return;
+        }
+        // Send ZPL
+        EB.PrinterZebra.printRawString({ data: zpl }, function(pres){
+          if(pres.status==='OK'){ alert('Sent to printer.'); }
+          else { alert('Print error: '+JSON.stringify(pres)); }
+          // Close connection
+          try{ EB.PrinterZebra.disconnect(); }catch(e){}
+        });
+      });
+    }catch(e){
+      alert('EB print exception: '+e);
+    }
+  }
+
+  // Initial draw
+  render();
+
+})();
+</script>
+</body>
+</html>

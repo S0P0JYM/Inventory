@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NFC Admin</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #0b1220; color: #e5e7eb; padding: 24px; }
+    h1 { color: #a78bfa; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    .card { background: #0f172a; border: 1px solid #1f2937; border-radius: 12px; padding: 16px; margin: 10px 0; }
+    input, select { padding: 10px; border-radius: 8px; border: 1px solid #1f2937; background: #060b16; color: #e5e7eb; }
+    button { padding: 10px 14px; border: none; border-radius: 8px; background: #2563eb; color: #fff; cursor: pointer; }
+    button:hover { background: #1d4ed8; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 8px 6px; border-bottom: 1px solid #1f2937; }
+    th { text-align: left; color: #93c5fd; }
+    .danger { background: #ef4444; }
+    .ghost { background: transparent; border: 1px dashed #334155; color: #cbd5e1; }
+    .muted { color: #94a3b8; font-size: 14px; }
+    a { color: #93c5fd; }
+  </style>
+</head>
+<body>
+  <h1>🔐 NFC Admin</h1>
+  <p class="muted">Manage allowed NFC tokens and redirect behavior. Open <a href="NFCLogin.html">NFCLogin.html</a> to test.</p>
+
+  <div class="card">
+    <h3>Configuration</h3>
+    <div class="row">
+      <label>Redirect URL&nbsp;<input id="redirectUrl" placeholder="Inventory.html" /></label>
+      <label>Case Sensitive&nbsp;
+        <select id="caseSensitive">
+          <option value="true">true</option>
+          <option value="false">false</option>
+        </select>
+      </label>
+      <button id="saveCfg">Save Config</button>
+    </div>
+    <p id="cfgMsg" class="muted"></p>
+  </div>
+
+  <div class="card">
+    <h3>Allowed Tokens</h3>
+    <div class="row">
+      <input id="newToken" placeholder="Enter new allowed token..." />
+      <button id="addToken">Add Token</button>
+      <button id="export" class="ghost">Export JSON</button>
+      <input id="importFile" type="file" accept="application/json" style="display:none" />
+      <button id="import" class="ghost">Import JSON</button>
+    </div>
+    <table>
+      <thead><tr><th>Token</th><th style="width:120px">Actions</th></tr></thead>
+      <tbody id="tokenRows"></tbody>
+    </table>
+    <div class="row">
+      <button id="wipeAll" class="danger">Wipe All</button>
+    </div>
+    <p class="muted">Tip: Program these tokens onto NFC badges as a Text (NDEF) record. In Chrome on Android, serve pages over HTTPS for Web NFC.</p>
+  </div>
+
+<script>
+const STORAGE_KEY = "nfcAuthCfg.v1";
+
+function loadCfg(){
+  try {
+    const cfg = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+    if (!Array.isArray(cfg.tokens)) cfg.tokens = [];
+    if (typeof cfg.redirectUrl !== "string") cfg.redirectUrl = "Inventory.html";
+    if (typeof cfg.caseSensitive !== "boolean") cfg.caseSensitive = true;
+    return cfg;
+  } catch(e){
+    return { tokens: [], redirectUrl: "Inventory.html", caseSensitive: true };
+  }
+}
+function saveCfg(cfg){
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(cfg));
+}
+function render(){
+  const cfg = loadCfg();
+  document.getElementById("redirectUrl").value = cfg.redirectUrl || "Inventory.html";
+  document.getElementById("caseSensitive").value = String(cfg.caseSensitive);
+  const tbody = document.getElementById("tokenRows");
+  tbody.innerHTML = "";
+  cfg.tokens.forEach((t, i) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = '<td><code>'+escapeHtml(t)+'</code></td>' +
+                   '<td><button data-i="'+i+'" class="danger">Delete</button></td>';
+    tbody.appendChild(tr);
+  });
+  tbody.querySelectorAll("button.danger").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const idx = Number(btn.getAttribute("data-i"));
+      const cfg = loadCfg();
+      cfg.tokens.splice(idx,1);
+      saveCfg(cfg); render();
+    });
+  });
+}
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+document.getElementById("addToken").addEventListener("click", () => {
+  const v = document.getElementById("newToken").value.trim();
+  if (!v) return;
+  const cfg = loadCfg();
+  if (!cfg.tokens.includes(v)) cfg.tokens.push(v);
+  saveCfg(cfg);
+  document.getElementById("newToken").value = "";
+  render();
+});
+
+document.getElementById("saveCfg").addEventListener("click", () => {
+  const cfg = loadCfg();
+  cfg.redirectUrl = document.getElementById("redirectUrl").value.trim() || "Inventory.html";
+  cfg.caseSensitive = document.getElementById("caseSensitive").value === "true";
+  saveCfg(cfg);
+  const msg = document.getElementById("cfgMsg");
+  msg.textContent = "Saved.";
+  setTimeout(() => msg.textContent = "", 1200);
+});
+
+document.getElementById("export").addEventListener("click", () => {
+  const cfg = loadCfg();
+  const blob = new Blob([JSON.stringify(cfg, null, 2)], {type: "application/json"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = "nfc-auth-config.json"; a.click();
+});
+
+document.getElementById("import").addEventListener("click", () => {
+  document.getElementById("importFile").click();
+});
+document.getElementById("importFile").addEventListener("change", e => {
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const cfg = JSON.parse(reader.result);
+      if (!cfg || typeof cfg !== "object" || !Array.isArray(cfg.tokens)) throw new Error("Invalid file");
+      saveCfg(cfg); render();
+    } catch (err) {
+      alert("Import failed: " + (err.message || err));
+    }
+  };
+  reader.readAsText(f);
+  e.target.value = "";
+});
+
+document.getElementById("wipeAll").addEventListener("click", () => {
+  if (!confirm("This will erase all tokens and config on this device. Continue?")) return;
+  localStorage.removeItem(STORAGE_KEY);
+  render();
+});
+
+render();
+</script>
+</body>
+</html>

@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+<title>TC56 Web NFC Reader</title>
+<style>
+  :root{font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;}
+  body{margin:0;background:#0f1724;color:#e6eef8;display:flex;flex-direction:column;min-height:100vh}
+  header{background:#0b1220;padding:12px 16px;box-shadow:0 2px 6px rgba(0,0,0,.35)}
+  h1{margin:0;font-size:18px}
+  main{padding:12px;display:flex;flex-direction:column;gap:10px;flex:1}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  button{padding:10px 12px;border-radius:8px;border:none;background:#1070f4;color:#fff;font-weight:600}
+  button.ghost{background:transparent;border:1px solid #2c3e56;color:#dbeafe}
+  .pill{font-size:12px;padding:4px 8px;border-radius:999px;background:#0b1a2a;border:1px solid #233142;color:#9fb0c9}
+  input[type="text"]{flex:1;min-width:220px;padding:10px;border-radius:8px;border:1px solid #233142;background:#0b1a2a;color:#e7f0fb}
+  .history{background:#071422;border-radius:8px;padding:10px;max-height:56vh;overflow:auto}
+  .item{padding:8px;border-bottom:1px dashed rgba(255,255,255,.06);display:flex;justify-content:space-between;gap:8px}
+  .item small{color:#9fb0c9}
+  .badge{display:inline-block;padding:2px 6px;border-radius:6px;border:1px solid #2c3e56;background:#0b1a2a;color:#c7d6ef;font-size:12px}
+  footer{padding:10px 16px;background:#08121a;color:#99b0c9;text-align:center}
+  code{background:#0b1a2a;border:1px solid #233142;border-radius:6px;padding:2px 6px}
+</style>
+</head>
+<body>
+<header>
+  <h1>TC56 Web NFC Reader</h1>
+  <div id="status" class="pill" style="margin-top:6px">Status: Ready</div>
+</header>
+
+<main>
+  <div class="row">
+    <button id="btnStart">Start scanning</button>
+    <button id="btnStop" class="ghost">Stop</button>
+    <span class="pill">Reads: <span id="count">0</span></span>
+  </div>
+
+  <div class="row">
+    <input id="filter" type="text" placeholder="Filter history (id, record text, type, mediaType)" />
+    <button id="btnExport" class="ghost">Export CSV</button>
+    <button id="btnCopy" class="ghost">Copy</button>
+    <button id="btnClear" class="ghost">Clear</button>
+  </div>
+
+  <div class="history" id="history" aria-live="polite"></div>
+
+  <div style="font-size:13px;color:#9fb0c9;line-height:1.4">
+    <p><strong>Notes:</strong> Web NFC requires <strong>Chrome on Android</strong> and a <strong>secure (HTTPS)</strong> page. Keep the app in the foreground while reading. DataWedge isn’t used for NFC; the Android NFC framework is.</p>
+    <p>When a tag is read, you’ll see ID, tech, and any NDEF records (text/URI/MIME). The page vibrates briefly on success.</p>
+  </div>
+</main>
+
+<footer>
+  Tip: Host this file over HTTPS (even on LAN using a self-signed cert). If you prefer an APK with native NFC (no HTTPS), I can provide it.
+</footer>
+
+<script>
+(function(){
+  const historyEl = document.getElementById('history');
+  const statusEl  = document.getElementById('status');
+  const countEl   = document.getElementById('count');
+  const filterEl  = document.getElementById('filter');
+  const btnStart  = document.getElementById('btnStart');
+  const btnStop   = document.getElementById('btnStop');
+  const btnExport = document.getElementById('btnExport');
+  const btnCopy   = document.getElementById('btnCopy');
+  const btnClear  = document.getElementById('btnClear');
+
+  let reader = null;
+  let running = false;
+  let items = JSON.parse(localStorage.getItem('tc56_nfc_reads_v1') || '[]');
+
+  function save(){ localStorage.setItem('tc56_nfc_reads_v1', JSON.stringify(items)); render(); }
+  function fmt(ts){ return new Date(ts).toLocaleString(); }
+  function vib(ms){ try{navigator.vibrate && navigator.vibrate(ms)}catch(e){} }
+  function hex(buf){ return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,'0')).join(''); }
+  function toCsvCell(s){ return '"' + String(s).replace(/"/g,'""') + '"'; }
+  function escapeHtml(s){ return (''+s).replace(/[&<>\"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m])); }
+
+  function recordToObj(r){
+    // Try to decode common NDEF record types
+    let payloadStr = '';
+    if (r.recordType === 'text') {
+      try {
+        const dec = new TextDecoder();
+        // First byte status: bit7 indicates UTF16; bits0-5 length of language code
+        const p = r.data ? r.data : r.payload; // Chrome uses .data in newer impl
+        const u8 = p instanceof ArrayBuffer ? new Uint8Array(p) : new Uint8Array(p.buffer);
+        const langLen = u8[0] & 0x3f;
+        payloadStr = dec.decode(u8.slice(1 + langLen));
+      } catch(e){ payloadStr = '[text]'; }
+    } else if (r.recordType === 'url' || r.recordType === 'uri') {
+      try {
+        const dec = new TextDecoder();
+        payloadStr = dec.decode(r.data || r.payload);
+      } catch(e){ payloadStr = '[uri]'; }
+    } else {
+      // Try generic decode
+      try {
+        const dec = new TextDecoder();
+        payloadStr = dec.decode(r.data || r.payload);
+      } catch(e) {
+        payloadStr = '[binary ' + ((r.data||r.payload)?.byteLength || 0) + ' bytes]';
+      }
+    }
+
+    return {
+      recordType: r.recordType,
+      mediaType: r.mediaType || '',
+      id: (r.id && typeof r.id === 'string') ? r.id : '',
+      text: payloadStr
+    };
+  }
+
+  function render(filter=''){
+    historyEl.innerHTML = '';
+    const f = filter.trim().toLowerCase();
+    const shown = items.filter(it => {
+      if(!f) return true;
+      const base = (it.tagId + ' ' + (it.tech||'') + ' ' + it.records.map(r => `${r.recordType} ${r.mediaType} ${r.text}`).join(' ')).toLowerCase();
+      return base.includes(f);
+    });
+
+    shown.forEach((it, idx) => {
+      const div = document.createElement('div');
+      div.className = 'item';
+      const meta = `
+        <div>
+          <div><strong class="badge">ID:</strong> <code>${escapeHtml(it.tagId)}</code></div>
+          <div style="margin-top:4px"><span class="badge">Tech</span> ${escapeHtml(it.tech||'N/A')}
+            &nbsp;&nbsp;<span class="badge">When</span> ${escapeHtml(fmt(it.t))}
+          </div>
+          <div style="margin-top:6px">
+            ${it.records.length ? '<span class="badge">Records</span>' : '<span class="badge">Records</span> none'}
+          </div>
+          <div style="margin-top:4px">
+            ${it.records.map((r,i)=>(
+              `<div style="margin:4px 0 0 0">
+                 <span class="badge">${escapeHtml(r.recordType || 'record')}</span>
+                 ${r.mediaType ? ` <span class="badge">${escapeHtml(r.mediaType)}</span>` : ''}
+                 ${r.id ? ` <span class="badge">id:${escapeHtml(r.id)}</span>` : ''}
+                 <div style="margin-top:2px"><code>${escapeHtml(r.text)}</code></div>
+               </div>`
+            )).join('')}
+          </div>
+        </div>`;
+      div.innerHTML = meta + `<div><button class="ghost" data-i="${idx}">del</button></div>`;
+      div.querySelector('button').addEventListener('click', (e)=>{
+        const i = Number(e.currentTarget.dataset.i);
+        items.splice(i,1); save();
+      });
+      historyEl.appendChild(div);
+    });
+    countEl.textContent = items.length;
+  }
+
+  async function start(){
+    if (!('NDEFReader' in window)) {
+      status('Web NFC not supported here. Use Chrome on Android over HTTPS.', true);
+      alert('Web NFC not supported. Try Chrome for Android, served via HTTPS.');
+      return;
+    }
+    try {
+      reader = new NDEFReader();
+      await reader.scan();       // start scanning
+      running = true;
+      status('Scanning… Tap an NFC tag.');
+      reader.onreadingerror = () => status('Read error — try again', true);
+      reader.onreading = (ev) => {
+        try {
+          const tagId = ev.serialNumber || '(no-id)';
+          const tech = (ev?.message?.records?.length ? 'NDEF' : 'Unknown');
+          const recs = [];
+          if (ev.message && ev.message.records) {
+            for (const r of ev.message.records) recs.push(recordToObj(r));
+          }
+          const entry = { t: Date.now(), tagId, tech, records: recs };
+          items.unshift(entry);
+          if (items.length > 2000) items = items.slice(0,2000);
+          save();
+          vib(40);
+          status('Last tag: ' + tagId + ' (' + new Date(entry.t).toLocaleTimeString() + ')');
+        } catch(e){
+          console.error(e);
+          status('Parse error', true);
+        }
+      };
+    } catch (err) {
+      console.error(err);
+      status('Failed to start scan: ' + (err?.message || err), true);
+      alert('Failed to start NFC scan. Ensure NFC is ON and this page is HTTPS.');
+    }
+  }
+
+  function stop(){
+    running = false;
+    // There is no explicit "stop" in current Web NFC; leaving page focus ends polling.
+    status('Stopped. Press Start to scan again.');
+  }
+
+  function status(msg, bad=false){
+    statusEl.textContent = 'Status: ' + msg;
+    statusEl.style.background = bad ? '#3a1215' : '#0b1a2a';
+    statusEl.style.border = '1px solid ' + (bad ? '#6b1b20' : '#233142');
+  }
+
+  // UI hooks
+  btnStart.addEventListener('click', start);
+  btnStop.addEventListener('click', stop);
+  btnClear.addEventListener('click', ()=>{ if(confirm('Clear history?')) { items=[]; save(); }});
+  btnExport.addEventListener('click', ()=>{
+    if(!items.length) return alert('No reads to export.');
+    const rows = [['tagId','tech','timestamp','recordIndex','recordType','mediaType','recordId','text']];
+    items.forEach(it => {
+      if (!it.records.length) rows.push([it.tagId, it.tech||'', new Date(it.t).toISOString(), '', '', '', '', '']);
+      it.records.forEach((r,idx)=>{
+        rows.push([it.tagId, it.tech||'', new Date(it.t).toISOString(), idx, r.recordType||'', r.mediaType||'', r.id||'', r.text||'']);
+      });
+    });
+    const csv = rows.map(r=>r.map(toCsvCell).join(',')).join('\n');
+    const blob = new Blob([csv], {type:'text/csv'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'nfc_reads_' + new Date().toISOString().slice(0,19).replace(/[:T]/g,'-') + '.csv';
+    document.body.appendChild(a); a.click();
+    setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 1500);
+  });
+  btnCopy.addEventListener('click', async ()=>{
+    if(!items.length) return alert('No reads to copy.');
+    const text = items.map(it=>{
+      const recs = it.records.map(r=>`${r.recordType}|${r.mediaType||''}|${r.id||''}|${r.text||''}`).join('; ');
+      return `${it.tagId}\t${it.tech||''}\t${new Date(it.t).toISOString()}\t${recs}`;
+    }).join('\n');
+    try {
+      await navigator.clipboard.writeText(text);
+      alert('Copied ' + items.length + ' rows.');
+    } catch(e) {
+      prompt('Copy manually:', text);
+    }
+  });
+  filterEl.addEventListener('input', ()=>render(filterEl.value));
+
+  // Initial
+  render();
+})();
+</script>
+</body>
+</html>

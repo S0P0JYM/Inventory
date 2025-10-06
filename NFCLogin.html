@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NFC Login (Authorized Redirect)</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #0f172a; color: #e5e7eb; text-align: center; padding: 40px; }
+    h1 { color: #38bdf8; }
+    .btn { padding: 10px 20px; border: none; border-radius: 8px; background: #2563eb; color: #fff; cursor: pointer; }
+    .btn:hover { background: #1d4ed8; }
+    .muted { color: #94a3b8; font-size: 14px; }
+    pre { text-align: left; margin: 16px auto; max-width: 680px; background: #0b1220; padding: 12px; border-radius: 8px; }
+    a { color: #93c5fd; }
+  </style>
+</head>
+<body>
+  <h1>NFC Login</h1>
+  <p class="muted">Tap your NFC badge to authenticate. Only authorized tokens will redirect.</p>
+  <p class="muted">Manage allowed tokens in <a href="Admin.html">Admin.html</a>.</p>
+  <button class="btn" onclick="startLogin()">Start NFC Login</button>
+  <pre id="output"></pre>
+
+<script>
+const STORAGE_KEY = "nfcAuthCfg.v1";
+
+function loadCfg(){
+  try {
+    const cfg = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+    if (!Array.isArray(cfg.tokens)) cfg.tokens = [];
+    if (typeof cfg.redirectUrl !== "string") cfg.redirectUrl = "Inventory.html";
+    if (typeof cfg.caseSensitive !== "boolean") cfg.caseSensitive = true;
+    return cfg;
+  } catch(e){
+    return { tokens: [], redirectUrl: "Inventory.html", caseSensitive: true };
+  }
+}
+
+function normalizeToken(s, caseSensitive){
+  if (!s) return "";
+  return caseSensitive ? String(s).trim() : String(s).trim().toLowerCase();
+}
+
+function isAuthorized(token, cfg){
+  const norm = normalizeToken(token, cfg.caseSensitive);
+  if (!norm) return false;
+  const list = cfg.caseSensitive ? cfg.tokens : cfg.tokens.map(t => String(t).toLowerCase());
+  return list.includes(norm);
+}
+
+async function startLogin() {
+  const output = document.getElementById('output');
+  const cfg = loadCfg();
+  if (!('NDEFReader' in window)) {
+    output.textContent = 'Web NFC not supported. Use Chrome on Android over HTTPS.';
+    return;
+  }
+  try {
+    const ndef = new NDEFReader();
+    await ndef.scan();
+    output.textContent = 'Tap your NFC badge...';
+    ndef.onreading = event => {
+      const decoder = new TextDecoder();
+      let token = "";
+      for (const record of event.message.records) {
+        if (record.recordType === 'text') {
+          token = decoder.decode(record.data);
+          break;
+        }
+      }
+      if (!token) {
+        output.textContent = 'No text record found on this NFC tag. Please program a text token on the badge.';
+        return;
+      }
+      const displayToken = token.replace(/\n/g, ' ').trim();
+      if (isAuthorized(token, cfg)) {
+        output.textContent = 'Authorized: ' + displayToken + '\nRedirecting to ' + cfg.redirectUrl + '...';
+        window.location.href = cfg.redirectUrl;
+      } else {
+        output.textContent = 'Unauthorized: ' + displayToken + '\nAccess denied. Ask admin to add this token in Admin.html';
+      }
+    };
+  } catch (error) {
+    document.getElementById('output').textContent = 'Error: ' + (error.message || error);
+  }
+}
+</script>
+</body>
+</html>
