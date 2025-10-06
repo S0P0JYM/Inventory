@@ -28,11 +28,11 @@ function loadCfg(){
   try {
     const cfg = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
     if (!Array.isArray(cfg.tokens)) cfg.tokens = [];
-    if (typeof cfg.redirectUrl !== "string") cfg.redirectUrl = "Inventory.html";
+    if (typeof cfg.redirectUrl !== "string") cfg.redirectUrl = "Warehousesystem.html";
     if (typeof cfg.caseSensitive !== "boolean") cfg.caseSensitive = true;
     return cfg;
   } catch(e){
-    return { tokens: [], redirectUrl: "Inventory.html", caseSensitive: true };
+    return { tokens: [], redirectUrl: "Warehousesystem.html", caseSensitive: true };
   }
 }
 
@@ -75,7 +75,7 @@ async function startLogin() {
       const displayToken = token.replace(/\n/g, ' ').trim();
       if (isAuthorized(token, cfg)) {
         output.textContent = 'Authorized: ' + displayToken + '\nRedirecting to ' + cfg.redirectUrl + '...';
-        window.location.href = cfg.redirectUrl;
+        window.location.href = Warehousesystem.html;
       } else {
         output.textContent = 'Unauthorized: ' + displayToken + '\nAccess denied. Ask admin to add/enroll this token in Admin.html';
       }
