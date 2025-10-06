@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>TC Handheld — Web NFC Reader/Writer</title>
+<style>
+  :root{--bg:#0f1724;--panel:#081522;--ink:#e6eef8;--muted:#9fb0c9;--line:#233142;--ok:#18b67e;--warn:#ffb020;--err:#ff5a67;--accent:#1070f4}
+  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial}
+  header{padding:12px 16px;background:#0b1220;border-bottom:1px solid #0e2238;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  h1{margin:0;font-size:18px}
+  main{padding:12px;display:flex;flex-direction:column;gap:12px}
+  .card{background:#081522;border:1px solid var(--line);border-radius:10px;padding:12px}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  input,select,button,textarea{font-size:16px}
+  input,select,textarea{padding:10px;border-radius:8px;border:1px solid var(--line);background:#0b1a2a;color:var(--ink)}
+  textarea{width:100%;min-height:100px}
+  button{padding:10px 12px;border:none;border-radius:8px;background:var(--accent);color:#fff;font-weight:600}
+  button.ghost{background:transparent;border:1px solid var(--line);color:#dbeafe}
+  .pill{padding:4px 8px;border-radius:999px;background:#0b1a2a;border:1px solid var(--line);color:var(--muted);font-size:12px}
+  .history{max-height:52vh;overflow:auto}
+  .item{display:grid;grid-template-columns:1fr auto;gap:8px;padding:10px;border-bottom:1px dashed rgba(255,255,255,.06)}
+  .item small{color:var(--muted)}
+  .badge{display:inline-block;padding:2px 6px;border-radius:6px;border:1px solid var(--line);background:#0b1a2a;color:#c7d6ef;font-size:12px}
+  .ok{background:#0f2a1f;border-color:#1f513f} .warn{background:#2a1f10;border-color:#5a3b1b} .err{background:#33161c;border-color:#6b1b20}
+  .split{display:grid;grid-template-columns:repeat(12,1fr);gap:8px}
+  .c-4{grid-column:span 4;min-width:180px} .c-6{grid-column:span 6;min-width:220px} .c-12{grid-column:span 12}
+</style>
+</head>
+<body>
+<header class="card" style="border:none;border-radius:0">
+  <h1>TC Handheld — Web NFC</h1>
+  <span id="status" class="pill">Status: Ready</span>
+  <span class="pill">Reads: <span id="count">0</span></span>
+</header>
+
+<main>
+  <!-- READ -->
+  <section class="card">
+    <div class="row"><strong>Read NDEF</strong></div>
+    <div class="row" style="margin-top:6px">
+      <button id="btnStart">Start scanning</button>
+      <button id="btnStop" class="ghost">Stop</button>
+      <input id="filter" placeholder="Filter history (id / text / type / mediaType)" style="flex:1;min-width:180px">
+      <button id="btnExport" class="ghost">Export CSV</button>
+      <button id="btnClear" class="ghost">Clear history</button>
+    </div>
+    <div id="history" class="history" aria-live="polite" style="margin-top:8px"></div>
+  </section>
+
+  <!-- WRITE -->
+  <section class="card">
+    <div class="row"><strong>Write NDEF</strong><span class="pill">Tap “Write now”, then touch a tag</span></div>
+    <div class="split" style="margin-top:6px">
+      <div class="c-6">
+        <label>Record type</label><br>
+        <select id="recType">
+          <option value="text">Text</option>
+          <option value="url">URL</option>
+          <option value="mime">MIME</option>
+        </select>
+      </div>
+      <div class="c-6" id="mimeBox" style="display:none">
+        <label>MIME type</label><br>
+        <input id="mimeType" placeholder="text/plain or application/json">
+      </div>
+      <div class="c-12">
+        <label>Payload</label><br>
+        <textarea id="payload" placeholder="Hello world / https://example.com / raw text for MIME"></textarea>
+      </div>
+      <div class="c-6">
+        <button id="btnAddRec" class="ghost">Add to message</button>
+        <button id="btnClearRecs" class="ghost">Clear message</button>
+      </div>
+      <div class="c-6" style="text-align:right">
+        <button id="btnWrite">Write now (tap tag)</button>
+      </div>
+      <div class="c-12">
+        <label>Message preview (records)</label>
+        <textarea id="msgPreview" readonly></textarea>
+      </div>
+    </div>
+    <p style="color:#9fb0c9;font-size:13px;margin-top:6px">
+      Web NFC writes to <b>NDEF-formatted</b> tags only. Formatting blank tags or locking tags isn’t supported in the browser.
+    </p>
+  </section>
+
+  <section class="card">
+    <div style="font-size:13px;color:#9fb0c9;line-height:1.4">
+      <p><b>Tips for Zebra TC devices:</b> Enable NFC in Android settings. Use Chrome (latest). Serve this page over <b>HTTPS</b>. Keep the app in the foreground. Some older tags (e.g., MIFARE Classic) may not expose NDEF to Web NFC.</p>
+    </div>
+  </section>
+</main>
+
+<script>
+(function(){
+  const historyEl = document.getElementById('history');
+  const statusEl  = document.getElementById('status');
+  const countEl   = document.getElementById('count');
+  const filterEl  = document.getElementById('filter');
+
+  const btnStart  = document.getElementById('btnStart');
+  const btnStop   = document.getElementById('btnStop');
+  const btnExport = document.getElementById('btnExport');
+  const btnClear  = document.getElementById('btnClear');
+
+  const recTypeEl   = document.getElementById('recType');
+  const mimeBoxEl   = document.getElementById('mimeBox');
+  const mimeTypeEl  = document.getElementById('mimeType');
+  const payloadEl   = document.getElementById('payload');
+  const btnAddRec   = document.getElementById('btnAddRec');
+  const btnClearRecs= document.getElementById('btnClearRecs');
+  const btnWrite    = document.getElementById('btnWrite');
+  const msgPreview  = document.getElementById('msgPreview');
+
+  let reader = null;
+  let scanning = false;
+  let items = JSON.parse(localStorage.getItem('tc_web_nfc_reads_v1')||'[]'); // newest first
+  let messageRecords = []; // to write
+
+  recTypeEl.addEventListener('change', ()=>{
+    mimeBoxEl.style.display = recTypeEl.value === 'mime' ? 'block' : 'none';
+  });
+
+  // ======= READ =======
+  btnStart.addEventListener('click', startScan);
+  btnStop.addEventListener('click', stopScan);
+  btnExport.addEventListener('click', exportCSV);
+  btnClear.addEventListener('click', ()=>{ if(confirm('Clear history?')){ items=[]; save(); render(); }});
+  filterEl.addEventListener('input', ()=>render());
+
+  async function startScan(){
+    if(!('NDEFReader' in window)){
+      return notSupported('Web NFC not supported. Use Chrome on Android over HTTPS, or ask for a native APK.');
+    }
+    try {
+      reader = new NDEFReader();
+      await reader.scan();
+      scanning = true;
+      setStatus('Scanning… tap a tag');
+      reader.onreadingerror = ()=> setStatus('Read error — try again', true);
+      reader.onreading = (ev)=> {
+        try {
+          const tagId = ev.serialNumber || '(no-id)';
+          const recs = [];
+          if (ev.message && ev.message.records) {
+            for (const r of ev.message.records) recs.push(recordToObj(r));
+          }
+          const entry = { t:Date.now(), tagId, records:recs };
+          items.unshift(entry);
+          if (items.length > 2000) items = items.slice(0,2000);
+          save(); render();
+          feedback(true);
+          setStatus('Last: ' + tagId + ' • ' + new Date(entry.t).toLocaleTimeString());
+        } catch(e){
+          console.error(e);
+          setStatus('Parse error', true);
+          feedback(false);
+        }
+      };
+    } catch (e) {
+      console.error(e);
+      setStatus('Failed to start scan: ' + (e?.message||e), true);
+      alert('Failed to start NFC scan. Ensure NFC is ON and the page is HTTPS.');
+    }
+  }
+  function stopScan(){ scanning=false; setStatus('Stopped. Press Start to scan again.'); /* scan stops when page unfocused anyway */ }
+
+  // ======= WRITE =======
+  btnAddRec.addEventListener('click', ()=>{
+    const type = recTypeEl.value;
+    const data = payloadEl.value || '';
+    if(!data.trim()){ alert('Enter a payload'); return; }
+    if(type==='mime' && !(mimeTypeEl.value||'').trim()){ alert('Enter a MIME type'); return; }
+
+    let rec;
+    if(type === 'text'){
+      rec = { recordType: 'text', data };
+    } else if(type === 'url'){
+      rec = { recordType: 'url', data };
+    } else { // mime
+      rec = { recordType: 'mime', mediaType: mimeTypeEl.value.trim(), data };
+    }
+    messageRecords.push(rec);
+    refreshPreview();
+    payloadEl.value = '';
+  });
+
+  btnClearRecs.addEventListener('click', ()=>{ messageRecords = []; refreshPreview(); });
+
+  btnWrite.addEventListener('click', async ()=>{
+    if(!('NDEFReader' in window)){
+      return notSupported('Web NFC not supported here.');
+    }
+    if(!messageRecords.length){ alert('Add at least one record to write.'); return; }
+    try{
+      const ndef = new NDEFReader();
+      // Prompt appears after this call; user must tap a tag soon after.
+      await ndef.write({ records: messageRecords });
+      feedback(true);
+      alert('Wrote ' + messageRecords.length + ' record(s).');
+    }catch(e){
+      console.error(e);
+      feedback(false);
+      alert('Write failed: ' + (e?.message||e));
+    }
+  });
+
+  // ======= Helpers =======
+  function recordToObj(r){
+    let text = '';
+    try{
+      if (r.recordType === 'text') {
+        // Decode RTD_TEXT
+        const u8 = bytesFrom(r);
+        const langLen = u8[0] & 0x3f;
+        text = new TextDecoder().decode(u8.slice(1+langLen));
+      } else if (r.recordType === 'url' || r.recordType === 'uri') {
+        text = new TextDecoder().decode(bytesFrom(r));
+      } else {
+        // Generic string try
+        text = new TextDecoder().decode(bytesFrom(r));
+      }
+    }catch(_){ text = `[binary ${(bytesFrom(r)?.byteLength||0)} bytes]`; }
+
+    return {
+      recordType: r.recordType,
+      mediaType: r.mediaType || '',
+      id: (typeof r.id === 'string') ? r.id : '',
+      text
+    };
+  }
+  function bytesFrom(r){
+    // Chrome currently exposes .data (ArrayBuffer); older builds may use .payload
+    if (r.data instanceof ArrayBuffer) return new Uint8Array(r.data);
+    if (r.payload instanceof ArrayBuffer) return new Uint8Array(r.payload);
+    if (r.data && r.data.buffer) return new Uint8Array(r.data.buffer);
+    return new Uint8Array(0);
+  }
+
+  function render(){
+    historyEl.innerHTML = '';
+    const f = (filterEl.value||'').toLowerCase().trim();
+    const shown = items.filter(it=>{
+      if(!f) return true;
+      const base = (it.tagId + ' ' + it.records.map(r=>`${r.recordType} ${r.mediaType} ${r.text}`).join(' ')).toLowerCase();
+      return base.includes(f);
+    });
+    shown.forEach((it, idx)=>{
+      const div = document.createElement('div');
+      div.className = 'item';
+      div.innerHTML = `
+        <div>
+          <div><strong class="badge">ID</strong> <code>${esc(it.tagId)}</code></div>
+          <div style="margin-top:4px"><span class="badge">When</span> ${new Date(it.t).toLocaleString()}</div>
+          <div style="margin-top:6px">${it.records.length?'<span class="badge">Records</span>':''}</div>
+          <div style="margin-top:4px">
+            ${it.records.map((r,i)=>`
+              <div style="margin:4px 0 0 0">
+                <span class="badge">${esc(r.recordType)}</span>
+                ${r.mediaType?` <span class="badge">${esc(r.mediaType)}</span>`:''}
+                ${r.id?` <span class="badge">id:${esc(r.id)}</span>`:''}
+                <div style="margin-top:2px"><code>${esc(r.text)}</code></div>
+              </div>`).join('')}
+          </div>
+        </div>
+        <div><button class="ghost" data-i="${idx}">del</button></div>
+      `;
+      div.querySelector('button')?.addEventListener('click', ()=>{
+        const pos = items.indexOf(shown[idx]);
+        if(pos>-1){ items.splice(pos,1); save(); render(); }
+      });
+      historyEl.appendChild(div);
+    });
+    countEl.textContent = items.length;
+  }
+
+  function refreshPreview(){
+    msgPreview.value = JSON.stringify({records: messageRecords}, null, 2);
+  }
+
+  function exportCSV(){
+    if(!items.length) return alert('No reads to export.');
+    const rows = [['tagId','timestamp','recordIndex','recordType','mediaType','recordId','text']];
+    items.forEach(it=>{
+      if(!it.records.length){
+        rows.push([it.tagId, new Date(it.t).toISOString(), '', '', '', '', '']);
+      }else{
+        it.records.forEach((r,i)=>{
+          rows.push([it.tagId, new Date(it.t).toISOString(), i, r.recordType||'', r.mediaType||'', r.id||'', r.text||'']);
+        });
+      }
+    });
+    const csv = rows.map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
+    const blob = new Blob([csv], {type:'text/csv'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'nfc_reads_'+new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')+'.csv';
+    document.body.appendChild(a); a.click();
+    setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 1200);
+  }
+
+  function save(){ localStorage.setItem('tc_web_nfc_reads_v1', JSON.stringify(items)); }
+  function setStatus(msg, bad=false){
+    statusEl.textContent = 'Status: ' + msg;
+    statusEl.style.background = bad ? '#3a1215' : '#0b1a2a';
+    statusEl.style.border = '1px solid ' + (bad ? '#6b1b20' : '#233142');
+  }
+  function notSupported(msg){ setStatus(msg, true); alert(msg); }
+  function esc(s){ return (''+s).replace(/[&<>\"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m])); }
+  function feedback(ok){
+    try{ navigator.vibrate && navigator.vibrate(ok?40:100); }catch(_){}
+    const AC = window.AudioContext||window.webkitAudioContext;
+    if(!AC) return;
+    const ctx = new AC(), o=ctx.createOscillator(), g=ctx.createGain();
+    o.type = ok?'sine':'square'; o.frequency.value = ok?880:220; g.gain.value=.06; o.connect(g).connect(ctx.destination);
+    o.start(); setTimeout(()=>{ o.stop(); ctx.close(); }, ok?120:220);
+  }
+
+  // Initial
+  render();
+  refreshPreview();
+})();
+</script>
+</body>
+</html>
