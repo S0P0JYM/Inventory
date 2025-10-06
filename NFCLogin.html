@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>NFC Login (Authorized Redirect)</title>
+  <title>NFC Login (Authorized Redirect + PIN Fallback)</title>
   <style>
     body { font-family: Arial, sans-serif; background: #0f172a; color: #e5e7eb; text-align: center; padding: 40px; }
     h1 { color: #38bdf8; }
@@ -12,14 +12,34 @@
     .muted { color: #94a3b8; font-size: 14px; }
     pre { text-align: left; margin: 16px auto; max-width: 680px; background: #0b1220; padding: 12px; border-radius: 8px; }
     a { color: #93c5fd; }
+    .row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+    .modal { display:none; position: fixed; inset: 0; background: rgba(0,0,0,.45); align-items: center; justify-content: center; }
+    .modal > .box { background: #0b1220; border: 1px solid #1f2937; border-radius: 12px; padding: 16px; width: min(90vw, 380px); text-align: left; }
+    .box input { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #1f2937; background: #060b16; color: #e5e7eb; }
   </style>
 </head>
 <body>
   <h1>NFC Login</h1>
-  <p class="muted">Tap your NFC badge to authenticate. Only authorized tokens will redirect.</p>
-  <p class="muted">Manage &amp; enroll badges in <a href="Admin.html">Admin.html</a>.</p>
-  <button class="btn" onclick="startLogin()">Start NFC Login</button>
+  <p class="muted">Tap your NFC badge to authenticate. If NFC isn’t available, use a PIN fallback.</p>
+  <p class="muted">Manage tokens &amp; PINs in <a href="Admin.html">Admin.html</a>.</p>
+  <div class="row">
+    <button class="btn" onclick="startLogin()">Start NFC Login</button>
+    <button class="btn" onclick="openPin()">Use PIN Instead</button>
+  </div>
   <pre id="output"></pre>
+
+  <div id="pinModal" class="modal">
+    <div class="box">
+      <h3 style="margin-top:0">PIN Login</h3>
+      <p class="muted">Enter your PIN to continue.</p>
+      <input id="pinInput" type="password" placeholder="••••" />
+      <div class="row" style="margin-top:10px; justify-content:flex-end">
+        <button class="btn" onclick="closePin()">Cancel</button>
+        <button class="btn" onclick="submitPin()">Login</button>
+      </div>
+      <div id="pinMsg" class="muted" style="margin-top:8px"></div>
+    </div>
+  </div>
 
 <script>
 const STORAGE_KEY = "nfcAuthCfg.v1";
@@ -28,11 +48,12 @@ function loadCfg(){
   try {
     const cfg = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
     if (!Array.isArray(cfg.tokens)) cfg.tokens = [];
+    if (!Array.isArray(cfg.pins)) cfg.pins = []; // [{label, hash}]
     if (typeof cfg.redirectUrl !== "string") cfg.redirectUrl = "Warehousesystem.html";
     if (typeof cfg.caseSensitive !== "boolean") cfg.caseSensitive = true;
     return cfg;
   } catch(e){
-    return { tokens: [], redirectUrl: "Warehousesystem.html", caseSensitive: true };
+    return { tokens: [], pins: [], redirectUrl: "Warehousesystem.html", caseSensitive: true };
   }
 }
 
@@ -48,11 +69,47 @@ function isAuthorized(token, cfg){
   return list.includes(norm);
 }
 
+async function sha256Hex(input){
+  const enc = new TextEncoder().encode(input);
+  const buf = await crypto.subtle.digest('SHA-256', enc);
+  const arr = Array.from(new Uint8Array(buf));
+  return arr.map(b => b.toString(16).padStart(2,'0')).join('');
+}
+
+function openPin(){
+  document.getElementById('pinInput').value = "";
+  document.getElementById('pinMsg').textContent = "";
+  document.getElementById('pinModal').style.display = "flex";
+  document.getElementById('pinInput').focus();
+}
+function closePin(){
+  document.getElementById('pinModal').style.display = "none";
+}
+
+async function submitPin(){
+  const msg = document.getElementById('pinMsg');
+  const pin = (document.getElementById('pinInput').value || "").trim();
+  if (!pin){ msg.textContent = "Enter your PIN."; return; }
+  const cfg = loadCfg();
+  try{
+    const hash = await sha256Hex(pin);
+    const match = (cfg.pins || []).find(p => p && p.hash === hash);
+    if (match){
+      msg.textContent = "PIN accepted. Redirecting...";
+      window.location.href = cfg.redirectUrl || "Warehousesystem.html";
+    } else {
+      msg.textContent = "Invalid PIN.";
+    }
+  } catch(e){
+    msg.textContent = "Error verifying PIN.";
+  }
+}
+
 async function startLogin() {
   const output = document.getElementById('output');
   const cfg = loadCfg();
   if (!('NDEFReader' in window)) {
-    output.textContent = 'Web NFC not supported. Use Chrome on Android over HTTPS.';
+    output.textContent = 'Web NFC not supported. Use Chrome on Android over HTTPS, or use PIN fallback.';
     return;
   }
   try {
@@ -69,15 +126,15 @@ async function startLogin() {
         }
       }
       if (!token) {
-        output.textContent = 'No text record found on this NFC tag. Please program a text token on the badge (Admin.html can enroll).';
+        output.textContent = 'No text record found on badge. Use Admin.html to enroll a token.';
         return;
       }
       const displayToken = token.replace(/\n/g, ' ').trim();
       if (isAuthorized(token, cfg)) {
-        output.textContent = 'Authorized: ' + displayToken + '\nRedirecting to ' + cfg.redirectUrl + '...';
+        output.textContent = 'Authorized: ' + displayToken + '\nRedirecting to Warehouse System...';
         window.location.href = Warehousesystem.html;
       } else {
-        output.textContent = 'Unauthorized: ' + displayToken + '\nAccess denied. Ask admin to add/enroll this token in Admin.html';
+        output.textContent = 'Unauthorized: ' + displayToken + '\nAccess denied. Ask admin to add/enroll this token or use PIN fallback.';
       }
     };
   } catch (error) {

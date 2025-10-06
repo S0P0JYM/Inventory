@@ -24,12 +24,12 @@
 </head>
 <body>
   <h1>🔐 NFC Admin</h1>
-  <p class="muted">Manage allowed NFC tokens, redirect behavior, and enroll new badges by tapping. Open <a href="NFCLogin.html">NFCLogin.html</a> to test.</p>
+  <p class="muted">Manage allowed NFC tokens, redirect behavior, enroll badges by tap, and set a PIN fallback. Open <a href="NFCLogin.html">NFCLogin.html</a> to test.</p>
 
   <div class="card">
     <h3>Configuration</h3>
     <div class="row">
-      <label>Redirect URL&nbsp;<input id="redirectUrl" placeholder="Inventory.html" /></label>
+      <label>Redirect URL&nbsp;<input id="redirectUrl" placeholder="Warehousesystem.html" /></label>
       <label>Case Sensitive&nbsp;
         <select id="caseSensitive">
           <option value="true">true</option>
@@ -66,42 +66,59 @@
       <thead><tr><th>Token</th><th style="width:120px">Actions</th></tr></thead>
       <tbody id="tokenRows"></tbody>
     </table>
+  </div>
+
+  <div class="card">
+    <h3>PIN Fallback</h3>
+    <p class="muted">Add one or more PINs as emergency access. PINs are stored as <em>SHA‑256 hashes</em> in this browser’s localStorage.</p>
     <div class="row">
-      <button id="wipeAll" class="danger">Wipe All</button>
+      <input id="pinLabel" placeholder="Label (e.g., User123)" />
+      <input id="pinPlain" type="password" placeholder="New PIN" />
+      <button id="addPin">Add PIN</button>
     </div>
-    <p class="muted">Tip: Chrome on Android + HTTPS is required for Web NFC.</p>
+    <table>
+      <thead><tr><th>Label</th><th>Hash (first 12)</th><th style="width:120px">Actions</th></tr></thead>
+      <tbody id="pinRows"></tbody>
+    </table>
+    <div class="row">
+      <button id="wipeAll" class="danger">Wipe All Config</button>
+    </div>
   </div>
 
 <script>
 const STORAGE_KEY = "nfcAuthCfg.v1";
 
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+
 function loadCfg(){
   try {
     const cfg = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
     if (!Array.isArray(cfg.tokens)) cfg.tokens = [];
-    if (typeof cfg.redirectUrl !== "string") cfg.redirectUrl = "Inventory.html";
+    if (!Array.isArray(cfg.pins)) cfg.pins = []; // [{label, hash}]
+    if (typeof cfg.redirectUrl !== "string") cfg.redirectUrl = "Warehousesystem.html";
     if (typeof cfg.caseSensitive !== "boolean") cfg.caseSensitive = true;
     return cfg;
   } catch(e){
-    return { tokens: [], redirectUrl: "Inventory.html", caseSensitive: true };
+    return { tokens: [], pins: [], redirectUrl: "Warehousesystem.html", caseSensitive: true };
   }
 }
-function saveCfg(cfg){
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(cfg));
-}
+function saveCfg(cfg){ localStorage.setItem(STORAGE_KEY, JSON.stringify(cfg)); }
+
 function render(){
   const cfg = loadCfg();
-  document.getElementById("redirectUrl").value = cfg.redirectUrl || "Inventory.html";
+  document.getElementById("redirectUrl").value = cfg.redirectUrl || "Warehousesystem.html";
   document.getElementById("caseSensitive").value = String(cfg.caseSensitive);
-  const tbody = document.getElementById("tokenRows");
-  tbody.innerHTML = "";
+
+  // tokens
+  const tbodyT = document.getElementById("tokenRows");
+  tbodyT.innerHTML = "";
   cfg.tokens.forEach((t, i) => {
     const tr = document.createElement("tr");
     tr.innerHTML = '<td><code>'+escapeHtml(t)+'</code></td>' +
                    '<td><button data-i="'+i+'" class="danger">Delete</button></td>';
-    tbody.appendChild(tr);
+    tbodyT.appendChild(tr);
   });
-  tbody.querySelectorAll("button.danger").forEach(btn => {
+  tbodyT.querySelectorAll("button.danger").forEach(btn => {
     btn.addEventListener("click", () => {
       const idx = Number(btn.getAttribute("data-i"));
       const cfg = loadCfg();
@@ -109,18 +126,56 @@ function render(){
       saveCfg(cfg); render();
     });
   });
-}
-function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
+  // pins
+  const tbodyP = document.getElementById("pinRows");
+  tbodyP.innerHTML = "";
+  (cfg.pins || []).forEach((p, i) => {
+    const h12 = (p.hash || "").slice(0,12);
+    const tr = document.createElement("tr");
+    tr.innerHTML = '<td>'+escapeHtml(p.label || "")+'</td>' +
+                   '<td><code>'+escapeHtml(h12)+'</code></td>' +
+                   '<td><button data-i="'+i+'" class="danger">Delete</button></td>';
+    tbodyP.appendChild(tr);
+  });
+  tbodyP.querySelectorAll("button.danger").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const idx = Number(btn.getAttribute("data-i"));
+      const cfg = loadCfg();
+      cfg.pins.splice(idx,1);
+      saveCfg(cfg); render();
+    });
+  });
+}
+
+async function sha256Hex(input){
+  const enc = new TextEncoder().encode(input);
+  const buf = await crypto.subtle.digest('SHA-256', enc);
+  const arr = Array.from(new Uint8Array(buf));
+  return arr.map(b => b.toString(16).padStart(2,'0')).join('');
+}
+
+document.getElementById("addPin").addEventListener("click", async () => {
+  const label = (document.getElementById("pinLabel").value || "").trim();
+  const pin = (document.getElementById("pinPlain").value || "").trim();
+  if (!label || !pin){ alert("Enter a label and PIN."); return; }
+  const hash = await sha256Hex(pin);
+  const cfg = loadCfg();
+  (cfg.pins ||= []);
+  cfg.pins.push({ label, hash });
+  saveCfg(cfg);
+  document.getElementById("pinLabel").value = "";
+  document.getElementById("pinPlain").value = "";
+  render();
+});
+
+// Enroll by Tap
 function genToken(){
-  // RFC4122-ish v4 token
   return "USER-" + ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, c => (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16));
 }
-
 document.getElementById("genToken").addEventListener("click", () => {
   document.getElementById("enrollToken").value = genToken();
 });
-
 document.getElementById("writeBadge").addEventListener("click", async () => {
   const msg = document.getElementById("enrollMsg");
   const token = (document.getElementById("enrollToken").value || "").trim();
@@ -139,7 +194,6 @@ document.getElementById("writeBadge").addEventListener("click", async () => {
     msg.textContent = "Write failed: " + (e.message || e);
   }
 });
-
 document.getElementById("readBadge").addEventListener("click", async () => {
   const msg = document.getElementById("enrollMsg");
   if (!("NDEFReader" in window)){ msg.textContent = "Web NFC not supported. Use Chrome on Android over HTTPS."; return; }
@@ -174,7 +228,7 @@ document.getElementById("addToken").addEventListener("click", () => {
 
 document.getElementById("saveCfg").addEventListener("click", () => {
   const cfg = loadCfg();
-  cfg.redirectUrl = document.getElementById("redirectUrl").value.trim() || "Inventory.html";
+  cfg.redirectUrl = document.getElementById("redirectUrl").value.trim() || "Warehousesystem.html";
   cfg.caseSensitive = document.getElementById("caseSensitive").value === "true";
   saveCfg(cfg);
   const msg = document.getElementById("cfgMsg");
@@ -201,6 +255,10 @@ document.getElementById("importFile").addEventListener("change", e => {
     try {
       const cfg = JSON.parse(reader.result);
       if (!cfg || typeof cfg !== "object" || !Array.isArray(cfg.tokens)) throw new Error("Invalid file");
+      // ensure pins array exists
+      if (!Array.isArray(cfg.pins)) cfg.pins = [];
+      if (typeof cfg.redirectUrl !== "string") cfg.redirectUrl = "Warehousesystem.html";
+      if (typeof cfg.caseSensitive !== "boolean") cfg.caseSensitive = true;
       saveCfg(cfg); render();
     } catch (err) {
       alert("Import failed: " + (err.message || err));
@@ -211,7 +269,7 @@ document.getElementById("importFile").addEventListener("change", e => {
 });
 
 document.getElementById("wipeAll").addEventListener("click", () => {
-  if (!confirm("This will erase all tokens and config on this device. Continue?")) return;
+  if (!confirm("This will erase tokens, PINs, and config on this device. Continue?")) return;
   localStorage.removeItem(STORAGE_KEY);
   render();
 });
