@@ -1,0 +1,35 @@
+/* Minimal, touch-friendly UI */
+:root { --bg:#0b1020; --card:#121a33; --accent:#4da3ff; --ok:#36c877; --warn:#f5a524; --danger:#ff5d5d; --text:#e7ecff; }
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;}
+a{color:var(--accent);text-decoration:none}
+.container{max-width:980px;margin:0 auto;padding:16px}
+.card{background:var(--card);border:1px solid rgba(255,255,255,.06);border-radius:18px;box-shadow:0 8px 30px rgba(0,0,0,.3);padding:18px;margin:14px 0}
+h1,h2,h3{margin:6px 0 12px}
+h1{font-size:28px}
+h2{font-size:22px}
+h3{font-size:18px}
+.row{display:flex;gap:12px;flex-wrap:wrap}
+.col{flex:1;min-width:260px}
+label{display:block;margin:10px 0 6px;font-size:14px;opacity:.9}
+input,select,button,textarea{width:100%;padding:12px 14px;border-radius:12px;border:1px solid rgba(255,255,255,.12);background:#0e1530;color:var(--text);font-size:16px}
+input:focus,select:focus,textarea:focus{outline:2px solid var(--accent);}
+button{cursor:pointer;background:linear-gradient(180deg, #1a254b, #101734);border:1px solid rgba(255,255,255,.1)}
+button.primary{background:linear-gradient(180deg, #1d4ed8, #1439a6);border-color:#1d4ed8}
+button.success{background:linear-gradient(180deg, #16a34a, #0c7a35);border-color:#16a34a}
+button.warn{background:linear-gradient(180deg, #f59e0b, #b45309);border-color:#f59e0b}
+button.danger{background:linear-gradient(180deg, #ef4444, #b91c1c);border-color:#ef4444}
+button:active{transform:translateY(1px)}
+.badge{display:inline-block;padding:4px 8px;border-radius:999px;background:#1b2750;border:1px solid rgba(255,255,255,.08);font-size:12px;margin-left:6px}
+.kbd{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;background:#0b132a;border:1px solid rgba(255,255,255,.12);padding:2px 6px;border-radius:6px;font-size:12px}
+.table{width:100%;border-collapse:collapse;margin-top:12px}
+.table th,.table td{border-bottom:1px solid rgba(255,255,255,.08);padding:10px;text-align:left}
+.table th{opacity:.8;font-weight:600}
+.flex{display:flex;align-items:center;gap:10px}
+.right{margin-left:auto}
+hr{border:none;border-top:1px solid rgba(255,255,255,.08);margin:16px 0}
+.small{font-size:13px;opacity:.85}
+.center{display:flex;justify-content:center;align-items:center}
+.hidden{display:none !important}
+footer{opacity:.6;font-size:12px;padding:16px;margin-top:20px;text-align:center}
+.toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#162147;border:1px solid rgba(255,255,255,.12);padding:12px 16px;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.4);z-index:9999}
