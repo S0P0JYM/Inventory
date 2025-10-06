@@ -19,11 +19,12 @@
     .ghost { background: transparent; border: 1px dashed #334155; color: #cbd5e1; }
     .muted { color: #94a3b8; font-size: 14px; }
     a { color: #93c5fd; }
+    code { color: #93c5fd; }
   </style>
 </head>
 <body>
   <h1>🔐 NFC Admin</h1>
-  <p class="muted">Manage allowed NFC tokens and redirect behavior. Open <a href="NFCLogin.html">NFCLogin.html</a> to test.</p>
+  <p class="muted">Manage allowed NFC tokens, redirect behavior, and enroll new badges by tapping. Open <a href="NFCLogin.html">NFCLogin.html</a> to test.</p>
 
   <div class="card">
     <h3>Configuration</h3>
@@ -38,6 +39,18 @@
       <button id="saveCfg">Save Config</button>
     </div>
     <p id="cfgMsg" class="muted"></p>
+  </div>
+
+  <div class="card">
+    <h3>Enroll Badge by Tap (Web NFC)</h3>
+    <p class="muted">Generate a token and write it to an NFC badge. After writing, it’s added to the allowed list automatically.</p>
+    <div class="row">
+      <input id="enrollToken" placeholder="Token to write (e.g., USER_1234)" style="min-width:260px" />
+      <button id="genToken" class="ghost">Generate</button>
+      <button id="writeBadge">Write to Badge</button>
+      <button id="readBadge" class="ghost">Read Badge</button>
+    </div>
+    <p id="enrollMsg" class="muted"></p>
   </div>
 
   <div class="card">
@@ -56,7 +69,7 @@
     <div class="row">
       <button id="wipeAll" class="danger">Wipe All</button>
     </div>
-    <p class="muted">Tip: Program these tokens onto NFC badges as a Text (NDEF) record. In Chrome on Android, serve pages over HTTPS for Web NFC.</p>
+    <p class="muted">Tip: Chrome on Android + HTTPS is required for Web NFC.</p>
   </div>
 
 <script>
@@ -98,6 +111,56 @@ function render(){
   });
 }
 function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+function genToken(){
+  // RFC4122-ish v4 token
+  return "USER-" + ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, c => (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16));
+}
+
+document.getElementById("genToken").addEventListener("click", () => {
+  document.getElementById("enrollToken").value = genToken();
+});
+
+document.getElementById("writeBadge").addEventListener("click", async () => {
+  const msg = document.getElementById("enrollMsg");
+  const token = (document.getElementById("enrollToken").value || "").trim();
+  if (!token){ msg.textContent = "Enter or generate a token first."; return; }
+  if (!("NDEFReader" in window)){ msg.textContent = "Web NFC not supported. Use Chrome on Android over HTTPS."; return; }
+  try {
+    const ndef = new NDEFReader();
+    await ndef.write({ records: [ { recordType: "text", data: token } ] });
+    msg.textContent = "Wrote token to badge. Adding to allowed list...";
+    const cfg = loadCfg();
+    if (!cfg.tokens.includes(token)) cfg.tokens.push(token);
+    saveCfg(cfg);
+    render();
+    msg.textContent = "Done! Badge written and token added.";
+  } catch (e) {
+    msg.textContent = "Write failed: " + (e.message || e);
+  }
+});
+
+document.getElementById("readBadge").addEventListener("click", async () => {
+  const msg = document.getElementById("enrollMsg");
+  if (!("NDEFReader" in window)){ msg.textContent = "Web NFC not supported. Use Chrome on Android over HTTPS."; return; }
+  try {
+    const ndef = new NDEFReader();
+    await ndef.scan();
+    msg.textContent = "Hold the badge near the device...";
+    ndef.onreading = (event) => {
+      const dec = new TextDecoder();
+      let token = "";
+      for (const rec of event.message.records){
+        if (rec.recordType === "text"){ token = dec.decode(rec.data); break; }
+      }
+      if (!token){ msg.textContent = "No text record found on badge."; return; }
+      document.getElementById("enrollToken").value = token.trim();
+      msg.textContent = "Read token from badge.";
+    };
+  } catch(e) {
+    msg.textContent = "Read failed: " + (e.message || e);
+  }
+});
 
 document.getElementById("addToken").addEventListener("click", () => {
   const v = document.getElementById("newToken").value.trim();
